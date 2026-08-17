@@ -1,0 +1,11 @@
+streamlit
+torch --extra-index-url https://download.pytorch.org/whl/cpu
+transformers
+xgboost
+joblib
+tldextract
+pandas
+numpy
+scikit-learn
+groq
+huggingface_hub

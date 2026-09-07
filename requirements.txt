@@ -1,11 +1,10 @@
 streamlit
-torch --extra-index-url https://download.pytorch.org/whl/cpu
+torch
 transformers
 xgboost
 joblib
-tldextract
 pandas
 numpy
-scikit-learn
+tldextract
 groq
-huggingface_hub
+vaderSentiment

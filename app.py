@@ -13,11 +13,9 @@ import tldextract
 from xgboost import XGBClassifier
 from transformers import AutoTokenizer, BertForSequenceClassification
 from groq import Groq
-from huggingface_hub import hf_hub_download, snapshot_download
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
-
-st.set_page_config(page_title="Decoy", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")
-
+st.set_page_config(page_title="Decoy.ai", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
@@ -49,6 +47,33 @@ st.markdown("""
         font-size: 15px;
         font-weight: 500;
     }
+    .dev-card {
+    background: linear-gradient(135deg, rgba(99,102,241,0.1), rgba(139,92,246,0.03));
+    border: 1px solid rgba(139,92,246,0.25);
+    border-radius: 14px;
+    padding: 16px 14px;
+    text-align: center;
+    margin-top: 10px;
+}
+.dev-card .dev-name {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    background: linear-gradient(90deg, #60a5fa, #a78bfa, #f472b6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 6px;
+}
+.dev-card .dev-links a {
+    color: #8b92a8;
+    text-decoration: none;
+    font-size: 12px;
+    margin: 0 6px;
+    transition: color 0.2s ease;
+}
+.dev-card .dev-links a:hover {
+    color: #a78bfa;
+}
     .pipeline-pill {
         display: inline-block;
         background: rgba(96,165,250,0.08);
@@ -164,19 +189,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
-@st.cache_resource
-def download_artifacts():
-    xgb_path = hf_hub_download(repo_id="Dhanushram26/xgboost_url_phishing.json", filename="xgboost_url_phishing.json")
-    transformer_path = hf_hub_download(repo_id="Dhanushram26/char_transformer_url.pth", filename="char_transformer_url.pth")
-    meta_path = hf_hub_download(repo_id="Dhanushram26/url_ensemble_meta.pkl", filename="url_ensemble_meta.pkl")
-    vocab_path = hf_hub_download(repo_id="Dhanushram26/char_to_idx.json", filename="char_to_idx.json")
-    tranco_path = hf_hub_download(repo_id="Dhanushram26/tranco_lookup.csv", filename="tranco_lookup.csv")
-    email_dir = snapshot_download(repo_id="Dhanushram26/decoy-models", allow_patterns="email_phishing_v6/*")
-    email_dir = f"{email_dir}/email_phishing_v6"
-    return xgb_path, transformer_path, meta_path, vocab_path, tranco_path, email_dir
-
-XGB_PATH, TRANSFORMER_PATH, META_PATH, CHAR_VOCAB_PATH, TRANCO_LOOKUP_PATH, EMAIL_MODEL_PATH = download_artifacts()
+ARTIFACT_DIR = "models/url_pipeline"
+XGB_PATH = f"{ARTIFACT_DIR}/xgboost_url_phishing.json"
+TRANSFORMER_PATH = f"{ARTIFACT_DIR}/char_transformer_url.pth"
+META_PATH = f"{ARTIFACT_DIR}/url_ensemble_meta.pkl"
+CHAR_VOCAB_PATH = f"{ARTIFACT_DIR}/char_to_idx.json"
+TRANCO_LOOKUP_PATH = f"{ARTIFACT_DIR}/tranco_lookup.csv"
+EMAIL_MODEL_DIR = "models/email_phishing"
+EMAIL_BERT_PATH = f"{EMAIL_MODEL_DIR}/bert"
+EMAIL_XGB_PATH = f"{EMAIL_MODEL_DIR}/xgb_structural.json"
+EMAIL_META_PATH = f"{EMAIL_MODEL_DIR}/meta_model.pkl"
+EMAIL_ENGINEERED_COLS_PATH = f"{EMAIL_MODEL_DIR}/engineered_cols.pkl"
+EMAIL_MAX_LEN = 256
 
 MAX_LEN = 160
 TOP_N_TRUSTED = 100000
@@ -197,6 +221,90 @@ KNOWN_BRANDS = ['paypal', 'google', 'amazon', 'microsoft', 'apple', 'facebook',
 # writable cache dir for tldextract's public suffix list (HF filesystem can be read-only elsewhere)
 _tld_extractor = tldextract.TLDExtract(cache_dir="/tmp/tldextract_cache")
 
+# ---- v8 email pipeline: brand-domain matching, tactic lexicon, features ----
+BRAND_REAL_DOMAINS = {
+    'paypal': ['paypal.com'], 'google': ['google.com', 'accounts.google.com'],
+    'amazon': ['amazon.com', 'amazon.in', 'amazon.co.uk'],
+    'microsoft': ['microsoft.com', 'live.com', 'outlook.com', 'office.com'],
+    'apple': ['apple.com', 'icloud.com'], 'facebook': ['facebook.com', 'fb.com'],
+    'netflix': ['netflix.com'], 'bankofamerica': ['bankofamerica.com'],
+    'wellsfargo': ['wellsfargo.com'], 'chase': ['chase.com'],
+    'instagram': ['instagram.com'], 'linkedin': ['linkedin.com'],
+    'ebay': ['ebay.com'], 'dropbox': ['dropbox.com'], 'adobe': ['adobe.com'],
+}
+TACTIC_LEXICON = {
+    'urgency': ['act now', 'immediately', 'urgent', 'right away', 'within 24 hours',
+                'within 48 hours', 'expires today', 'time sensitive', 'final notice',
+                'last chance', 'today only'],
+    'fear_threat': ['suspended', 'unauthorized', 'unusual activity', 'legal action',
+                    'account locked', 'will be terminated', 'permanently deleted',
+                    'security alert', 'compromised', 'suspicious login'],
+    'reward_greed': ['congratulations', "you've been selected", 'claim your', 'winner',
+                      'free gift', 'gift card', 'reward', 'bonus', 'exclusive offer'],
+    'authority': ['irs', 'government', 'legal department', 'law enforcement',
+                  'court order', 'compliance', 'audit'],
+    'action_request': ['click here', 'verify your', 'confirm your', 'update your payment',
+                        'log in now', 'reset your password', 'provide your',
+                        'wire transfer', 'send gift card'],
+}
+EMAIL_ENGINEERED_COLS = [
+    'num_urls_in_email', 'brand_mentioned', 'brand_domain_match', 'brand_mismatch',
+    'brand_named_no_link', 'tactic_urgency', 'tactic_fear_threat', 'tactic_reward_greed',
+    'tactic_authority', 'tactic_action_request', 'tactic_total', 'generic_greeting',
+    'sentiment_compound', 'sentiment_negative', 'high_risk_combo',
+]
+EMAIL_URL_RE = re.compile(r'https?://[^\s<>"\')\]]+')
+EMAIL_ADDR_RE = re.compile(r'\S+@\S+\.\S+')
+
+def normalize_email_text(text):
+    """Matches the normalization used during v8 BERT training — apply this
+    BEFORE feeding to BERT, but AFTER extracting engineered features (which
+    need the real URLs intact)."""
+    text = EMAIL_URL_RE.sub(' <URL> ', text)
+    text = EMAIL_ADDR_RE.sub(' <EMAIL> ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    return text.strip()
+
+def extract_email_engineered_features(raw_email_text):
+    """Run on RAW text (real URLs intact) — do NOT normalize first."""
+    text_lower = raw_email_text.lower()
+    urls = EMAIL_URL_RE.findall(raw_email_text)
+    brands = [b for b in KNOWN_BRANDS if re.search(rf'(?<![a-z]){re.escape(b)}(?![a-z])', text_lower)]
+
+    feats = {'num_urls_in_email': len(urls)}
+    if not brands:
+        feats.update({'brand_mentioned': 0, 'brand_domain_match': 0,
+                       'brand_mismatch': 0, 'brand_named_no_link': 0})
+    elif not urls:
+        feats.update({'brand_mentioned': 1, 'brand_domain_match': 0,
+                       'brand_mismatch': 0, 'brand_named_no_link': 1})
+    else:
+        linked_domains = {_tld_extractor(u).domain + '.' + _tld_extractor(u).suffix for u in urls}
+        match = any(linked_domains & set(BRAND_REAL_DOMAINS.get(b, [])) for b in brands)
+        feats.update({'brand_mentioned': 1, 'brand_domain_match': int(match),
+                       'brand_mismatch': int(not match), 'brand_named_no_link': 0})
+
+    for category, phrases in TACTIC_LEXICON.items():
+        feats[f'tactic_{category}'] = sum(1 for p in phrases if p in text_lower)
+    feats['tactic_total'] = sum(feats[f'tactic_{c}'] for c in TACTIC_LEXICON)
+
+    first_line = text_lower.strip().split('\n')[0]
+    feats['generic_greeting'] = int(bool(
+        re.search(r'dear (customer|user|member|valued customer|candidate|applicant)', first_line)
+    ))
+
+    polarity = _vader.polarity_scores(raw_email_text[:1000])  # truncated, matches training
+    feats['sentiment_compound'] = polarity['compound']
+    feats['sentiment_negative'] = polarity['neg']
+
+    feats['high_risk_combo'] = int(
+        (feats['tactic_urgency'] > 0 or feats['tactic_fear_threat'] > 0) and
+        (feats['brand_mismatch'] == 1 or feats['brand_named_no_link'] == 1 or
+         (feats['generic_greeting'] == 1 and feats['tactic_action_request'] > 0))
+    )
+    return feats
+
 class CharTransformer(nn.Module):
     def __init__(self, vocab_size, embed_dim=64, num_heads=4, num_layers=2, max_len=MAX_LEN, num_classes=2):
         super().__init__()
@@ -212,6 +320,7 @@ class CharTransformer(nn.Module):
         x = self.transformer_encoder(x)
         x = x.mean(dim=1)
         return self.classifier(x)
+
 
 @st.cache_resource
 def load_artifacts():
@@ -233,9 +342,17 @@ def load_artifacts():
     tranco_df = pd.read_csv(TRANCO_LOOKUP_PATH)
     tranco_rank_lookup = dict(zip(tranco_df['domain'], tranco_df['rank']))
 
-    email_tokenizer = AutoTokenizer.from_pretrained(EMAIL_MODEL_PATH)
-    email_model = BertForSequenceClassification.from_pretrained(EMAIL_MODEL_PATH).to(device)
-    email_model.eval()
+    email_tokenizer = AutoTokenizer.from_pretrained(EMAIL_BERT_PATH)
+    email_bert_model = BertForSequenceClassification.from_pretrained(EMAIL_BERT_PATH).to(device)
+    email_bert_model.eval()
+
+    email_xgb_model = XGBClassifier()
+    email_xgb_model.load_model(EMAIL_XGB_PATH)
+
+    email_meta_model = joblib.load(EMAIL_META_PATH)
+    email_engineered_cols = joblib.load(EMAIL_ENGINEERED_COLS_PATH)
+
+    vader_analyzer = SentimentIntensityAnalyzer()
 
     groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
@@ -243,11 +360,17 @@ def load_artifacts():
         "device": device, "xgb_model": xgb_model, "char_to_idx": char_to_idx,
         "transformer_model": transformer_model, "meta_model": meta_model,
         "tranco_rank_lookup": tranco_rank_lookup,
-        "email_tokenizer": email_tokenizer, "email_model": email_model,
+        "email_tokenizer": email_tokenizer, "email_bert_model": email_bert_model,
+        "email_xgb_model": email_xgb_model, "email_meta_model": email_meta_model,
+        "email_engineered_cols": email_engineered_cols, "vader_analyzer": vader_analyzer,
         "groq_client": groq_client,
     }
 
 ART = load_artifacts()
+_vader = ART["vader_analyzer"]
+
+
+# FEATURE ENGINEERING
 
 def shannon_entrophy(s):
     if not s:
@@ -297,6 +420,8 @@ def encode_url(url, char_to_idx, max_len=MAX_LEN):
     ids += [char_to_idx.get('<PAD>', 0)] * (max_len - len(ids))
     return ids
 
+
+# Inference
 def predict_url(url):
     feats = extract_features(url)
     is_known, trust_score = get_domain_trust(url)
@@ -323,71 +448,50 @@ def predict_url(url):
     return {"url": url, "xgb_prob": xgb_prob, "transformer_prob": transformer_prob,
             "final_prob": final_prob, "verdict": verdict, "matched": "model"}
 
-def detect_bec_signals(email_text):
-    """Rule-assist layer for BEC/subtle phishing that BERT alone under-detects
-    (secrecy requests, sender-unreachable pretext, financial asks, account-scare language)."""
-    text = email_text.lower()
-    signals = {}
+def predict_email(raw_email_text):
+    # Step 1: engineered features from RAW text (real URLs, real brand names)
+    feats = extract_email_engineered_features(raw_email_text)
 
-    signals['secrecy_request'] = bool(re.search(
-        r"keep (this|it) (confidential|between us|quiet|private)|don'?t (tell|loop in|mention|discuss)|"
-        r"confidential(ly)? for now|can'?t discuss.*over email", text))
-
-    signals['claims_unreachable'] = bool(re.search(
-        r"can'?t talk|in a meeting|unreachable|mid-?flight|back.?to.?back (meetings|interviews|calls)|"
-        r"tied up|won'?t be reachable|stuck in|no signal|spotty (signal|reception)|heading into", text))
-
-    signals['financial_ask'] = bool(re.search(
-        r"wire transfer|wire \$|gift cards?|banking details|send (money|funds|payment)|"
-        r"account (number|routing)|process(ing)? the payment|update.*payment method|"
-        r"push through|authorize the (payment|transfer)|action(ing)? a payment|handle the payment|"
-        r"get to my banking|process(ing)? .*payment|get.*over to the account|send.*to the account|"
-        r"\$[\d,]+", text))
-
-    has_urgency = bool(re.search(r"urgent(ly)?|time sensitive|immediately|asap|today|before (end of day|close of business)|within \d+ hours?", text))
-    has_specifics = bool(re.search(r"#\d+|order\s*#|invoice\s*#|ticket\s*#|reference\s*#|ending in \d{4}", text))
-    signals['urgency_no_specifics'] = has_urgency and not has_specifics
-
-    signals['account_scare_language'] = bool(re.search(
-        r"account.*(suspended|under review|locked|policy violation)|storage.*(almost full|will be deleted)|"
-        r"two-factor authentication.*disabled|fraud alert|unusual activity|unauthorized (charge|access)", text))
-
-    bec_triad = sum([signals['secrecy_request'], signals['claims_unreachable'], signals['financial_ask']])
-
-    if bec_triad >= 2:
-        rule_score = 0.92
-    elif signals['account_scare_language']:
-        rule_score = 0.85
-    elif signals['secrecy_request'] or signals['claims_unreachable']:
-        rule_score = 0.55
-    elif signals['urgency_no_specifics']:
-        rule_score = 0.35
-    else:
-        rule_score = 0.0
-
-    signals['rule_score'] = rule_score
-    return signals
-
-
-def predict_email(email_text):
-    inputs = ART["email_tokenizer"](email_text, truncation=True, padding=True,
-                                     max_length=256, return_tensors='pt').to(ART["device"])
+    # Step 2: normalize THEN run BERT — matches v8 training distribution
+    normalized_text = normalize_email_text(raw_email_text)
+    inputs = ART["email_tokenizer"](normalized_text, truncation=True, padding=True,
+                                     max_length=EMAIL_MAX_LEN, return_tensors='pt').to(ART["device"])
     with torch.no_grad():
-        outputs = ART["email_model"](**inputs)
-        bert_prob = float(torch.softmax(outputs.logits, dim=1)[:, 1].item())
+        bert_prob = float(torch.softmax(ART["email_bert_model"](**inputs).logits, dim=1)[0, 1].item())
 
-    signals = detect_bec_signals(email_text)
-    rule_score = signals['rule_score']
+    # Step 3: XGBoost on engineered features
+    feats_df = pd.DataFrame([feats])[ART["email_engineered_cols"]]
+    xgb_prob = float(ART["email_xgb_model"].predict_proba(feats_df)[:, 1][0])
 
-    # weighted blend when both signals moderately agree — boosts instead of capping at max,
-    # since two moderate signals together are stronger evidence than either alone
-    if bert_prob > 0.25 and rule_score > 0.25:
-        combined_prob = bert_prob + rule_score * (1 - bert_prob)
-    else:
-        combined_prob = max(bert_prob, rule_score)
+    # Step 4: meta-learner
+    meta_input = np.array([[bert_prob, xgb_prob]])
+    final_prob = float(ART["email_meta_model"].predict_proba(meta_input)[:, 1][0])
 
-    verdict = "Phishing" if combined_prob > 0.5 else "Safe"
-    return {"email_prob": combined_prob, "bert_prob": bert_prob, "rule_score": rule_score, "verdict": verdict}
+    # Step 5: deterministic override — mandatory brand-impersonation rule +
+    # zero-red-flag ceiling. The meta-learner alone learns to ignore these
+    # signals on in-distribution training data, so they're enforced as rules
+    # here, same pattern as the URL pipeline's allowlist short-circuit.
+    ml_prob_before_override = final_prob
+    override_applied = False
+    if feats['brand_mismatch'] == 1 and final_prob < 0.75:
+        final_prob = 0.75
+        override_applied = True
+    elif feats['high_risk_combo'] == 1 and final_prob < 0.65:
+        final_prob = 0.65
+        override_applied = True
+    elif (feats['brand_mismatch'] == 0 and feats['brand_named_no_link'] == 0
+          and feats['tactic_total'] == 0 and feats['num_urls_in_email'] == 0
+          and feats['generic_greeting'] == 0 and final_prob > 0.4):
+        final_prob = 0.4
+        override_applied = True
+
+    verdict = "Phishing" if final_prob >= 0.5 else "Safe"
+    return {
+        "email_prob": final_prob, "bert_prob": bert_prob, "xgb_prob": xgb_prob,
+        "verdict": verdict, "override_applied": override_applied,
+        "ml_prob_before_override": ml_prob_before_override,
+        "brand_mismatch": feats['brand_mismatch'], "high_risk_combo": feats['high_risk_combo'],
+    }
 
 def explain_verdict(url_result=None, email_result=None):
     if not ART["groq_client"]:
@@ -406,7 +510,10 @@ Note: for scores below, higher = more likely phishing.
     if email_result:
         context += f"""Email content analyzed.
 Final verdict: {email_result['verdict']}
-- BERT model: {email_result['email_prob']:.2f} probability of phishing
+Detection path: {"rule-based adjustment (brand impersonation or high-risk pattern detected)" if email_result.get('override_applied') else "full ML ensemble"}
+- BERT model (semantic/contextual): {email_result['bert_prob']:.2f} probability of phishing
+- XGBoost model (engineered features — brand impersonation, urgency tactics, sentiment): {email_result['xgb_prob']:.2f}
+- Combined ensemble score: {email_result['email_prob']:.2f}
 """
 
     prompt = f"""You are a cybersecurity assistant explaining phishing detection results to a user.
@@ -419,7 +526,7 @@ If a URL matched the trusted domain allowlist, briefly mention it's a well-estab
 Explain in 2-3 sentences per input why it was flagged this way, referencing the actual scores accurately. Be concise and clear for a non-technical user."""
 
     response = ART["groq_client"].chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
     )
@@ -443,21 +550,28 @@ def render_score_card(col, label, value, icon):
             unsafe_allow_html=True
         )
 
+
 with st.sidebar:
-    st.markdown("## 🛡️ Decoy")
+    st.markdown("## Decoy.ai")
     st.caption("Multi-layer phishing detection engine")
     st.markdown("---")
     st.markdown("**Detection Pipeline**")
     st.markdown('<div class="sidebar-stat">🔗 <b>URL</b> — XGBoost + Char-Transformer + Domain-Trust Allowlist</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sidebar-stat">📧 <b>Email</b> — Fine-tuned BERT classifier</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-stat">📧 <b>Email</b> — BERT + XGBoost + Brand-Impersonation Rules</div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-stat">🤖 <b>Explanation</b> — Groq (Llama 3.3 70B)</div>', unsafe_allow_html=True)
     st.markdown("---")
-    st.caption("Built by Dhanush")
+    st.markdown("""<div class="dev-card"> <div class="dev-name">Built by Dhanush</div>
+    <div class="dev-links">
+        <a href="https://github.com/YOUR_USERNAME" target="_blank">GitHub</a>·
+        <a href="https://linkedin.com/in/YOUR_PROFILE" target="_blank">LinkedIn</a>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-    
+
 st.markdown("""
 <div class="hero">
-    <div class="hero-title">🛡️ Decoy</div>
+    <div class="hero-title">Decoy.ai</div>
     <div class="hero-sub">Multi-layer phishing detection — URL structure, character patterns, domain trust & AI reasoning</div>
     <div style="margin-top: 14px;">
         <span class="pipeline-pill">⚡ XGBoost</span>
@@ -495,13 +609,23 @@ with tab2:
     email_input = st.text_area("Paste email content to check:", height=200,
                                 placeholder="Paste the email body here...")
     if st.button("Analyze Email", type="primary") and email_input:
-        with st.spinner("Running BERT classifier..."):
+        with st.spinner("Running BERT + XGBoost ensemble..."):
             email_result = predict_email(email_input)
 
         render_verdict_banner(email_result["verdict"])
 
-        c1, _, _ = st.columns(3)
-        render_score_card(c1, "BERT Confidence", email_result["email_prob"], "🧠")
+        if email_result.get("override_applied"):
+            st.caption(
+                f"⚠️ Rule-based adjustment applied — raw ML score was "
+                f"{email_result['ml_prob_before_override']:.0%}, adjusted to "
+                f"{email_result['email_prob']:.0%} due to "
+                f"{'brand impersonation' if email_result['brand_mismatch'] else 'risk pattern'} detection."
+            )
+
+        c1, c2, c3 = st.columns(3)
+        render_score_card(c1, "BERT", email_result["bert_prob"], "🧠")
+        render_score_card(c2, "XGBoost", email_result["xgb_prob"], "⚡")
+        render_score_card(c3, "Ensemble", email_result["email_prob"], "🎯")
 
         with st.spinner("🤖 AI analyzing threat patterns..."):
             explanation = explain_verdict(email_result=email_result)

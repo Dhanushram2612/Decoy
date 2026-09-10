@@ -14,6 +14,7 @@ from xgboost import XGBClassifier
 from transformers import AutoTokenizer, BertForSequenceClassification
 from groq import Groq
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from huggingface_hub import snapshot_download
 
 st.set_page_config(page_title="Decoy.ai", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")
 
@@ -189,13 +190,24 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-ARTIFACT_DIR = "models/url_pipeline"
+HF_REPO_ID = "DhanushramS/Decoy_model"
+
+@st.cache_resource
+def get_model_dir():
+    return snapshot_download(repo_id=HF_REPO_ID, repo_type="model")
+
+
+
+MODEL_DIR = get_model_dir()
+
+ARTIFACT_DIR = f"{MODEL_DIR}/url_pipeline"
 XGB_PATH = f"{ARTIFACT_DIR}/xgboost_url_phishing.json"
 TRANSFORMER_PATH = f"{ARTIFACT_DIR}/char_transformer_url.pth"
 META_PATH = f"{ARTIFACT_DIR}/url_ensemble_meta.pkl"
 CHAR_VOCAB_PATH = f"{ARTIFACT_DIR}/char_to_idx.json"
 TRANCO_LOOKUP_PATH = f"{ARTIFACT_DIR}/tranco_lookup.csv"
-EMAIL_MODEL_DIR = "models/email_phishing"
+
+EMAIL_MODEL_DIR = f"{MODEL_DIR}/email_phishing"
 EMAIL_BERT_PATH = f"{EMAIL_MODEL_DIR}/bert"
 EMAIL_XGB_PATH = f"{EMAIL_MODEL_DIR}/xgb_structural.json"
 EMAIL_META_PATH = f"{EMAIL_MODEL_DIR}/meta_model.pkl"

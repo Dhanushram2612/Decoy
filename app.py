@@ -1,4 +1,3 @@
-
 import json
 import math
 import re
@@ -190,13 +189,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ==== Hugging Face Hub model download ====
 HF_REPO_ID = "DhanushramS/Decoy_model"
 
 @st.cache_resource
 def get_model_dir():
     return snapshot_download(repo_id=HF_REPO_ID, repo_type="model")
-
-
 
 MODEL_DIR = get_model_dir()
 

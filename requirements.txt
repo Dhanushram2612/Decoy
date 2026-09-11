@@ -2,6 +2,7 @@ streamlit
 torch
 transformers
 xgboost
+scikit-learn
 joblib
 pandas
 numpy

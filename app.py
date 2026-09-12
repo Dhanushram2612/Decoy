@@ -47,33 +47,32 @@ st.markdown("""
         font-size: 15px;
         font-weight: 500;
     }
-    .dev-card {
-    background: linear-gradient(135deg, rgba(99,102,241,0.1), rgba(139,92,246,0.03));
-    border: 1px solid rgba(139,92,246,0.25);
-    border-radius: 14px;
-    padding: 16px 14px;
-    text-align: center;
-    margin-top: 10px;
-}
-.dev-card .dev-name {
-    font-family: 'Space Grotesk', sans-serif;
-    font-weight: 700;
-    font-size: 15px;
-    background: linear-gradient(90deg, #60a5fa, #a78bfa, #f472b6);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin-bottom: 6px;
-}
-.dev-card .dev-links a {
-    color: #8b92a8;
-    text-decoration: none;
-    font-size: 12px;
-    margin: 0 6px;
-    transition: color 0.2s ease;
-}
-.dev-card .dev-links a:hover {
-    color: #a78bfa;
-}
+
+    /* Footer bar (replaces old sidebar dev-card) */
+    .app-footer {
+        position: fixed;
+        left: 0;
+        bottom: 0;
+        width: 100%;
+        background: rgba(10, 10, 15, 0.85);
+        backdrop-filter: blur(8px);
+        text-align: center;
+        padding: 8px 0;
+        font-size: 12.5px;
+        color: #8b92a8;
+        border-top: 1px solid rgba(255,255,255,0.06);
+        z-index: 999;
+    }
+    .app-footer a {
+        color: #a78bfa;
+        text-decoration: none;
+        margin: 0 6px;
+        font-weight: 500;
+    }
+    .app-footer a:hover {
+        color: #ffffff;
+    }
+
     .pipeline-pill {
         display: inline-block;
         background: rgba(96,165,250,0.08);
@@ -569,14 +568,6 @@ with st.sidebar:
     st.markdown('<div class="sidebar-stat">🔗 <b>URL</b> — XGBoost + Char-Transformer + Domain-Trust Allowlist</div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-stat">📧 <b>Email</b> — BERT + XGBoost + Brand-Impersonation Rules</div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-stat">🤖 <b>Explanation</b> — Groq (gpt-oss-120b)</div>', unsafe_allow_html=True)
-    st.markdown("---")
-    st.markdown("""<div class="dev-card"> <div class="dev-name">Built by Dhanush</div>
-    <div class="dev-links">
-        <a href="https://github.com/YOUR_USERNAME" target="_blank">GitHub</a>·
-        <a href="https://linkedin.com/in/YOUR_PROFILE" target="_blank">LinkedIn</a>
-    </div>
-</div>
-""", unsafe_allow_html=True)
 
 
 st.markdown("""
@@ -640,3 +631,11 @@ with tab2:
         with st.spinner("🤖 AI analyzing threat patterns..."):
             explanation = explain_verdict(email_result=email_result)
         st.markdown(f"<div class='explain-box'>{explanation}</div>", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="app-footer">
+    Decoy.ai &nbsp;·&nbsp; Built by Dhanush &nbsp;·&nbsp;
+    <a href="https://github.com/YOUR_USERNAME" target="_blank">GitHub</a> &nbsp;·&nbsp;
+    <a href="https://linkedin.com/in/YOUR_PROFILE" target="_blank">LinkedIn</a>
+</div>
+""", unsafe_allow_html=True)

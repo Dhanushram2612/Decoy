@@ -568,7 +568,7 @@ with st.sidebar:
     st.markdown("**Detection Pipeline**")
     st.markdown('<div class="sidebar-stat">🔗 <b>URL</b> — XGBoost + Char-Transformer + Domain-Trust Allowlist</div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-stat">📧 <b>Email</b> — BERT + XGBoost + Brand-Impersonation Rules</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sidebar-stat">🤖 <b>Explanation</b> — Groq (Llama 3.3 70B)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-stat">🤖 <b>Explanation</b> — Groq (gpt-oss-120b)</div>', unsafe_allow_html=True)
     st.markdown("---")
     st.markdown("""<div class="dev-card"> <div class="dev-name">Built by Dhanush</div>
     <div class="dev-links">

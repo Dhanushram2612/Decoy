@@ -15,7 +15,7 @@ from groq import Groq
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from huggingface_hub import snapshot_download
 
-st.set_page_config(page_title="Decoy.ai", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Decoy.ai", page_icon="Decoy", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
@@ -123,7 +123,6 @@ st.markdown("""
     }
     .score-value { font-size: 30px !important; font-weight: 700; margin: 4px 0 0 0; font-family: 'Space Grotesk', sans-serif; }
     .score-label { color: #8b92a8; font-size: 12px; margin: 0; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
-    .score-icon { font-size: 20px; }
 
     /* Explanation box */
     .explain-box {
@@ -188,7 +187,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ==== Hugging Face Hub model download ====
+
 HF_REPO_ID = "DhanushramS/Decoy_model"
 
 @st.cache_resource
@@ -227,10 +226,10 @@ KNOWN_BRANDS = ['paypal', 'google', 'amazon', 'microsoft', 'apple', 'facebook',
                 'netflix', 'bankofamerica', 'wellsfargo', 'chase', 'instagram',
                 'linkedin', 'ebay', 'dropbox', 'adobe']
 
-# writable cache dir for tldextract's public suffix list (HF filesystem can be read-only elsewhere)
+
 _tld_extractor = tldextract.TLDExtract(cache_dir="/tmp/tldextract_cache")
 
-# ---- v8 email pipeline: brand-domain matching, tactic lexicon, features ----
+
 BRAND_REAL_DOMAINS = {
     'paypal': ['paypal.com'], 'google': ['google.com', 'accounts.google.com'],
     'amazon': ['amazon.com', 'amazon.in', 'amazon.co.uk'],
@@ -266,7 +265,7 @@ EMAIL_URL_RE = re.compile(r'https?://[^\s<>"\')\]]+')
 EMAIL_ADDR_RE = re.compile(r'\S+@\S+\.\S+')
 
 def normalize_email_text(text):
-    """Matches the normalization used during v8 BERT training — apply this
+    """Matches the normalization used during v8 BERT training - apply this
     BEFORE feeding to BERT, but AFTER extracting engineered features (which
     need the real URLs intact)."""
     text = EMAIL_URL_RE.sub(' <URL> ', text)
@@ -276,7 +275,7 @@ def normalize_email_text(text):
     return text.strip()
 
 def extract_email_engineered_features(raw_email_text):
-    """Run on RAW text (real URLs intact) — do NOT normalize first."""
+    """Run on RAW text (real URLs intact) - do NOT normalize first."""
     text_lower = raw_email_text.lower()
     urls = EMAIL_URL_RE.findall(raw_email_text)
     brands = [b for b in KNOWN_BRANDS if re.search(rf'(?<![a-z]){re.escape(b)}(?![a-z])', text_lower)]
@@ -379,7 +378,7 @@ ART = load_artifacts()
 _vader = ART["vader_analyzer"]
 
 
-# FEATURE ENGINEERING
+
 
 def shannon_entrophy(s):
     if not s:
@@ -430,13 +429,14 @@ def encode_url(url, char_to_idx, max_len=MAX_LEN):
     return ids
 
 
-# Inference
+
+
 def predict_url(url):
     feats = extract_features(url)
     is_known, trust_score = get_domain_trust(url)
     is_impersonation_signal = feats['brand_impersonation'] or feats['is_suspicious_tld']
 
-    # Allowlist short-circuit: well-established domain, no impersonation/suspicious-TLD red flags
+    
     if is_known and trust_score > 0.5 and not is_impersonation_signal:
         return {"url": url, "xgb_prob": 0.02, "transformer_prob": 0.02,
                 "final_prob": 0.02, "verdict": "Legitimate", "matched": "allowlist"}
@@ -458,28 +458,25 @@ def predict_url(url):
             "final_prob": final_prob, "verdict": verdict, "matched": "model"}
 
 def predict_email(raw_email_text):
-    # Step 1: engineered features from RAW text (real URLs, real brand names)
+    
     feats = extract_email_engineered_features(raw_email_text)
 
-    # Step 2: normalize THEN run BERT — matches v8 training distribution
+    
     normalized_text = normalize_email_text(raw_email_text)
     inputs = ART["email_tokenizer"](normalized_text, truncation=True, padding=True,
                                      max_length=EMAIL_MAX_LEN, return_tensors='pt').to(ART["device"])
     with torch.no_grad():
         bert_prob = float(torch.softmax(ART["email_bert_model"](**inputs).logits, dim=1)[0, 1].item())
 
-    # Step 3: XGBoost on engineered features
+    
     feats_df = pd.DataFrame([feats])[ART["email_engineered_cols"]]
     xgb_prob = float(ART["email_xgb_model"].predict_proba(feats_df)[:, 1][0])
 
-    # Step 4: meta-learner
+    
     meta_input = np.array([[bert_prob, xgb_prob]])
     final_prob = float(ART["email_meta_model"].predict_proba(meta_input)[:, 1][0])
 
-    # Step 5: deterministic override — mandatory brand-impersonation rule +
-    # zero-red-flag ceiling. The meta-learner alone learns to ignore these
-    # signals on in-distribution training data, so they're enforced as rules
-    # here, same pattern as the URL pipeline's allowlist short-circuit.
+    
     ml_prob_before_override = final_prob
     override_applied = False
     if feats['brand_mismatch'] == 1 and final_prob < 0.75:
@@ -502,58 +499,79 @@ def predict_email(raw_email_text):
         "brand_mismatch": feats['brand_mismatch'], "high_risk_combo": feats['high_risk_combo'],
     }
 
+def strip_markdown_artifacts(text):
+    """Safety net in case the LLM ignores the plain-text instruction -
+    strips bold/italic/header/code markers and bullet symbols so the
+    explanation always renders as plain prose."""
+    text = re.sub(r'[*_#`]', '', text)
+    text = re.sub(r'^[\-\•]\s+', '', text, flags=re.MULTILINE)
+    return text.strip()
+
 def explain_verdict(url_result=None, email_result=None):
     if not ART["groq_client"]:
-        return "_(Set GROQ_API_KEY in secrets to enable AI explanations.)_"
+        return "Set GROQ_API_KEY in secrets to enable explanations."
 
     context = ""
     if url_result:
+        risk_level = (
+            "very high" if url_result['final_prob'] > 0.85 else
+            "high" if url_result['final_prob'] > 0.6 else
+            "low"
+        )
         context += f"""URL analyzed: {url_result['url']}
-Final verdict: {url_result['verdict']}
-Detection path: {"trusted domain allowlist" if url_result.get('matched')=='allowlist' else "full ML model pipeline"}
-Note: for scores below, higher = more likely phishing.
-- XGBoost model (structural/lexical features): {url_result['xgb_prob']:.2f}
-- Character-Transformer model (raw URL text patterns): {url_result['transformer_prob']:.2f}
-- Combined ensemble score: {url_result['final_prob']:.2f}
+Verdict: {url_result['verdict']}
+How it was decided: {"this domain is on a trusted allowlist of well-known, popular websites" if url_result.get('matched') == 'allowlist' else f"a detection model examined the URL's structure and found {risk_level} risk indicators"}
 """
+        if url_result.get('matched') != 'allowlist':
+            ext = _tld_extractor(url_result['url'])
+            registered_domain = f"{ext.domain}.{ext.suffix}"
+            context += f"Actual registered domain: {registered_domain}\n"
+            context += f"Uses a domain extension often abused for scams: {'yes' if ext.suffix in SUSPICIOUS_TLDS else 'no'}\n"
+
     if email_result:
+        risk_level = (
+            "very high" if email_result['email_prob'] > 0.85 else
+            "high" if email_result['email_prob'] > 0.5 else
+            "low"
+        )
         context += f"""Email content analyzed.
-Final verdict: {email_result['verdict']}
-Detection path: {"rule-based adjustment (brand impersonation or high-risk pattern detected)" if email_result.get('override_applied') else "full ML ensemble"}
-- BERT model (semantic/contextual): {email_result['bert_prob']:.2f} probability of phishing
-- XGBoost model (engineered features — brand impersonation, urgency tactics, sentiment): {email_result['xgb_prob']:.2f}
-- Combined ensemble score: {email_result['email_prob']:.2f}
+Verdict: {email_result['verdict']}
+Risk level: {risk_level}
+Impersonates a known brand without linking to that brand's real website: {"yes" if email_result['brand_mismatch'] else "no"}
+Uses common scam pressure tactics (urgency, threats, rewards, requests to click/verify/pay): {"yes" if email_result['high_risk_combo'] else "no"}
 """
 
-    prompt = f"""You are a cybersecurity assistant explaining phishing detection results to a user.
+    prompt = f"""You are explaining a phishing/safety check result to an ordinary person with no technical background. They do not know what "machine learning," "confidence score," "XGBoost," "BERT," "ensemble," or "classifier" mean, and using those words will confuse them.
 
 {context}
 
-Important: the URL and email were evaluated independently — no combined verdict between them.
-If a URL matched the trusted domain allowlist, briefly mention it's a well-established, popular domain rather than describing model scores as the primary reason.
-
-Explain in 2-3 sentences per input why it was flagged this way, referencing the actual scores accurately. Be concise and clear for a non-technical user."""
+Write 2-3 short sentences, like a knowledgeable friend warning them or reassuring them. Rules:
+- Never mention model names, algorithms, scores, percentages, or the word "AI"/"machine learning."
+- Never use markdown formatting (no headers, no bold with **, no bullet points, no numbered lists).
+- Never use emojis.
+- Explain why it is risky or safe using concrete, plain-language evidence (for example, "the actual web address has nothing to do with the real company" or "this does not show any of the usual warning signs of a scam").
+- End with a plain, direct recommendation (do not click it, do not reply, or it is fine to open).
+- Write it as flowing prose, the way a person would type a text message or a quick note, not a report."""
 
     response = ART["groq_client"].chat.completions.create(
         model="openai/gpt-oss-120b",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
+        temperature=0.4,
     )
-    return response.choices[0].message.content
+    return strip_markdown_artifacts(response.choices[0].message.content)
 
 def render_verdict_banner(verdict, matched=None):
     is_safe = verdict in ("Legitimate", "Safe")
     css_class = "verdict-safe" if is_safe else "verdict-phishing"
-    icon = "✅" if is_safe else "🚨"
     sub = ""
     if matched == "allowlist":
-        sub = '<div class="verdict-sub">Matched trusted domain allowlist — high-confidence known-safe site</div>'
-    st.markdown(f"<div class='{css_class}'><p class='verdict-title'>{icon} {verdict}</p>{sub}</div>", unsafe_allow_html=True)
+        sub = '<div class="verdict-sub">Matched trusted domain allowlist - high-confidence known-safe site</div>'
+    st.markdown(f"<div class='{css_class}'><p class='verdict-title'>{verdict}</p>{sub}</div>", unsafe_allow_html=True)
 
-def render_score_card(col, label, value, icon):
+def render_score_card(col, label, value):
     with col:
         st.markdown(
-            f"<div class='score-card'><span class='score-icon'>{icon}</span>"
+            f"<div class='score-card'>"
             f"<p class='score-label'>{label}</p>"
             f"<p class='score-value'>{value:.0%}</p></div>",
             unsafe_allow_html=True
@@ -561,31 +579,31 @@ def render_score_card(col, label, value, icon):
 
 
 with st.sidebar:
-    st.markdown("## Decoy.ai")
+    st.title("Decoy.ai")
     st.caption("Multi-layer phishing detection engine")
     st.markdown("---")
     st.markdown("**Detection Pipeline**")
-    st.markdown('<div class="sidebar-stat">🔗 <b>URL</b> — XGBoost + Char-Transformer + Domain-Trust Allowlist</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sidebar-stat">📧 <b>Email</b> — BERT + XGBoost + Brand-Impersonation Rules</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sidebar-stat">🤖 <b>Explanation</b> — Groq (gpt-oss-120b)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-stat"><b>URL</b> - XGBoost + Char-Transformer + Domain-Trust Allowlist</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-stat"><b>Email</b> - BERT + XGBoost + Brand-Impersonation Rules</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-stat"><b>Explanation</b> - Groq (gpt-oss-120b)</div>', unsafe_allow_html=True)
 
 
 st.markdown("""
 <div class="hero">
     <div class="hero-title">Decoy.ai</div>
-    <div class="hero-sub">Multi-layer phishing detection — URL structure, character patterns, domain trust & AI reasoning</div>
+    <div class="hero-sub">Multi-layer phishing detection - URL structure, character patterns, domain trust and AI reasoning</div>
     <div style="margin-top: 14px;">
-        <span class="pipeline-pill">⚡ XGBoost</span>
-        <span class="pipeline-pill">🔤 Char-Transformer</span>
-        <span class="pipeline-pill">🌐 Domain Trust</span>
-        <span class="pipeline-pill">🧠 BERT</span>
-        <span class="pipeline-pill">💬 LLM Reasoning</span>
+        <span class="pipeline-pill">XGBoost</span>
+        <span class="pipeline-pill">Char-Transformer</span>
+        <span class="pipeline-pill">Domain Trust</span>
+        <span class="pipeline-pill">BERT</span>
+        <span class="pipeline-pill">LLM Reasoning</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 st.write("")
-tab1, tab2 = st.tabs(["🔗  Check URL", "📧  Check Email"])
+tab1, tab2 = st.tabs(["Check URL", "Check Email"])
 
 with tab1:
     url_input = st.text_input("Paste a URL to check:", placeholder="https://example.com/login")
@@ -597,12 +615,12 @@ with tab1:
 
         if url_result.get("matched") != "allowlist":
             c1, c2, c3 = st.columns(3)
-            render_score_card(c1, "XGBoost", url_result["xgb_prob"], "⚡")
-            render_score_card(c2, "Char-Transformer", url_result["transformer_prob"], "🔤")
-            render_score_card(c3, "Ensemble", url_result["final_prob"], "🎯")
+            render_score_card(c1, "XGBoost", url_result["xgb_prob"])
+            render_score_card(c2, "Char-Transformer", url_result["transformer_prob"])
+            render_score_card(c3, "Ensemble", url_result["final_prob"])
             st.progress(url_result["final_prob"])
 
-        with st.spinner("🤖 AI analyzing threat patterns..."):
+        with st.spinner("Analyzing threat patterns..."):
             explanation = explain_verdict(url_result=url_result)
         st.markdown(f"<div class='explain-box'>{explanation}</div>", unsafe_allow_html=True)
 
@@ -610,32 +628,32 @@ with tab2:
     email_input = st.text_area("Paste email content to check:", height=200,
                                 placeholder="Paste the email body here...")
     if st.button("Analyze Email", type="primary") and email_input:
-        with st.spinner("Running BERT + XGBoost ensemble..."):
+        with st.spinner("Running detection models..."):
             email_result = predict_email(email_input)
 
         render_verdict_banner(email_result["verdict"])
 
         if email_result.get("override_applied"):
             st.caption(
-                f"⚠️ Rule-based adjustment applied — raw ML score was "
+                f"Rule-based adjustment applied - raw model score was "
                 f"{email_result['ml_prob_before_override']:.0%}, adjusted to "
                 f"{email_result['email_prob']:.0%} due to "
                 f"{'brand impersonation' if email_result['brand_mismatch'] else 'risk pattern'} detection."
             )
 
         c1, c2, c3 = st.columns(3)
-        render_score_card(c1, "BERT", email_result["bert_prob"], "🧠")
-        render_score_card(c2, "XGBoost", email_result["xgb_prob"], "⚡")
-        render_score_card(c3, "Ensemble", email_result["email_prob"], "🎯")
+        render_score_card(c1, "BERT", email_result["bert_prob"])
+        render_score_card(c2, "XGBoost", email_result["xgb_prob"])
+        render_score_card(c3, "Ensemble", email_result["email_prob"])
 
-        with st.spinner("🤖 AI analyzing threat patterns..."):
+        with st.spinner("Analyzing threat patterns..."):
             explanation = explain_verdict(email_result=email_result)
         st.markdown(f"<div class='explain-box'>{explanation}</div>", unsafe_allow_html=True)
 
 st.markdown("""
 <div class="app-footer">
-    Decoy.ai &nbsp;·&nbsp; Built by Dhanush &nbsp;·&nbsp;
-    <a href="https://github.com/Dhanushram2612" target="_blank">GitHub</a> &nbsp;·&nbsp;
+    Decoy.ai &nbsp;&middot;&nbsp; Built by Dhanush &nbsp;&middot;&nbsp;
+    <a href="https://github.com/Dhanushram2612" target="_blank">GitHub</a> &nbsp;&middot;&nbsp;
     <a href="https://www.linkedin.com/in/dhanushram-s-967b81309/" target="_blank">LinkedIn</a>
 </div>
 """, unsafe_allow_html=True)

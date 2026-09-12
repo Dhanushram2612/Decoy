@@ -635,7 +635,7 @@ with tab2:
 st.markdown("""
 <div class="app-footer">
     Decoy.ai &nbsp;·&nbsp; Built by Dhanush &nbsp;·&nbsp;
-    <a href="https://github.com/YOUR_USERNAME" target="_blank">GitHub</a> &nbsp;·&nbsp;
-    <a href="https://linkedin.com/in/YOUR_PROFILE" target="_blank">LinkedIn</a>
+    <a href="https://github.com/Dhanushram2612" target="_blank">GitHub</a> &nbsp;·&nbsp;
+    <a href="https://www.linkedin.com/in/dhanushram-s-967b81309/" target="_blank">LinkedIn</a>
 </div>
 """, unsafe_allow_html=True)
